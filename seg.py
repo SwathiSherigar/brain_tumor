@@ -1,160 +1,147 @@
-import numpy as np
-import cv2
-import nibabel as nib
+import streamlit as st
+import keras.backend as K
 import keras
+import tensorflow as tf
 import matplotlib.pyplot as plt
-import tkinter as tk
-from tkinter import filedialog, messagebox
+import numpy as np
+import nibabel as nib
+import cv2
+from keras.models import load_model
+import tempfile
 
-# Load the Keras model
-model = keras.models.load_model('model_per_class.h5', compile=False)
+# Define segmentation classes
+SEGMENT_CLASSES = {0: 'NOT tumor', 1: 'NECROTIC/CORE', 2: 'EDEMA', 3: 'ENHANCING'}
+IMG_SIZE = 128
+VOLUME_SLICES = 100
+VOLUME_START_AT = 22
 
-# Constants
-IMG_SIZE = 128  # Example value, adjust as needed
-SEGMENT_CLASSES = ['Background', 'Edema', 'Non-enhancing tumor', 'Enhancing tumor']  # Example classes
+# Define model path
+MODEL_PATH = 'model_per_class.h5'
 
-# Function to load an MRI image
-def imageLoader(path):
-    image = nib.load(path).get_fdata()
-    return image  # Return the raw data without resizing
+# Dice coefficient functions
+def dice_coef(y_true, y_pred, smooth=1.0):
+    total_loss = 0
+    for i in range(4):
+        y_true_f = K.flatten(y_true[:,:,:,i])
+        y_pred_f = K.flatten(y_pred[:,:,:,i])
+        intersection = K.sum(y_true_f * y_pred_f)
+        loss = (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+        total_loss += loss
+    return total_loss / 4
 
-# Function to normalize image data
-def normalize_image(image):
-    image_min = np.min(image)
-    image_max = np.max(image)
-    return (image - image_min) / (image_max - image_min)  # Normalize to [0, 1]
+# Additional metrics functions
+def precision(y_true, y_pred):
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
+    return true_positives / (predicted_positives + K.epsilon())
 
-# Function to show predictions by ID
-def showPredictsById(flair_path, seg_path, start_slice=70):
-    gt = nib.load(seg_path).get_fdata()
-    origImage = imageLoader(flair_path)
+def sensitivity(y_true, y_pred):
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+    return true_positives / (possible_positives + K.epsilon())
 
-    # Simulate predictions (replace this with actual model predictions)
-    p = np.random.rand(1, IMG_SIZE, IMG_SIZE, 4)  # Replace with actual prediction logic
+# Load the pre-trained model
+model = load_model(
+    MODEL_PATH,
+    custom_objects={"dice_coef": dice_coef, "precision": precision, "sensitivity": sensitivity},
+    compile=False
+)
 
-    # Get predictions for core, edema, and enhancing tumor
-    core = p[0, :, :, 1]
-    edema = p[0, :, :, 2]
-    enhancing = p[0, :, :, 3]
+# Prediction function
+def predict_images(flair_file, t1ce_file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".nii") as tmp_flair:
+        tmp_flair.write(flair_file.getvalue())
+        flair_path = tmp_flair.name
 
-    # Apply thresholding to create binary masks for better visualization
-    core_binary = (core > 0.3).astype(np.float32)
-    edema_binary = (edema > 0.3).astype(np.float32)
-    enhancing_binary = (enhancing > 0.3).astype(np.float32)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".nii") as tmp_t1ce:
+        tmp_t1ce.write(t1ce_file.getvalue())
+        t1ce_path = tmp_t1ce.name
 
-    # Resize ground truth for consistent display
-    gt_resized = cv2.resize(gt[:, :, start_slice], (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
-
-    # Normalize and prepare the original image
-    origImage_normalized = normalize_image(origImage[:, :, start_slice])
-    origImage_resized = cv2.resize(origImage_normalized, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
-
-    # Create a figure for displaying images
-    plt.figure(figsize=(20, 10))
-    f, axarr = plt.subplots(1, 6, figsize=(20, 10))
-
-    # Set background color to dark
-    f.patch.set_facecolor('black')
+    # Load the images
+    flair = nib.load(flair_path).get_fdata()
+    t1ce = nib.load(t1ce_path).get_fdata()
     
-    # Original Image
-    axarr[0].imshow(origImage_resized, cmap="gray")
-    axarr[0].title.set_text('Original image (Flair)')
-    axarr[0].axis('off')  # Hide axes
-    axarr[0].set_facecolor('white')
+    # Prepare data for prediction
+    X = np.empty((VOLUME_SLICES, IMG_SIZE, IMG_SIZE, 2))
+    for i in range(VOLUME_SLICES):
+        X[i, :, :, 0] = cv2.resize(flair[:, :, i + VOLUME_START_AT], (IMG_SIZE, IMG_SIZE))
+        X[i, :, :, 1] = cv2.resize(t1ce[:, :, i + VOLUME_START_AT], (IMG_SIZE, IMG_SIZE))
+    
+    # Get predictions
+    predictions = model.predict(X / np.max(X), verbose=1)
+    return predictions, flair_path
 
-    # Ground Truth
-    axarr[1].imshow(gt_resized, cmap="Reds", interpolation='none', alpha=0.3)
-    axarr[1].title.set_text('Ground Truth')
-    axarr[1].axis('off')
-    axarr[1].set_facecolor('black')
+# # Display function
+# def display_predictions(predictions, flair_path, start_slice=70):
+#     orig_image = nib.load(flair_path).get_fdata()
+#     core, edema, enhancing = predictions[:, :, :, 1], predictions[:, :, :, 2], predictions[:, :, :, 3]
 
-    # All Classes Overlay
-    axarr[2].imshow(origImage_resized, cmap="gray", interpolation='none')
-    axarr[2].imshow(p[0, :, :, 1:4].max(axis=2), cmap="Reds", interpolation='none', alpha=0.3)
-    axarr[2].title.set_text('All Classes')
-    axarr[2].axis('off')
-    axarr[2].set_facecolor('black')
+#     fig, axarr = plt.subplots(1, 4, figsize=(20, 10))
+#     axarr[0].imshow(cv2.resize(orig_image[:, :, start_slice + VOLUME_START_AT], (IMG_SIZE, IMG_SIZE)), cmap="gray")
+#     axarr[0].set_title('Original Flair')
+    
+#     for i, (title, img) in enumerate(zip(['Necrotic/Core', 'Edema', 'Enhancing'], [core, edema, enhancing])):
+#         axarr[i + 1].imshow(img[start_slice, :, :], cmap="gray", alpha=0.5)
+#         axarr[i + 1].set_title(title)
+    
+#     st.pyplot(fig)
 
-    # Edema Prediction as solid color
-    axarr[3].imshow(origImage_resized, cmap="gray", interpolation='none')
-    axarr[3].imshow(edema_binary, cmap="OrRd", interpolation='none', alpha=0.3)  # Solid color
-    axarr[3].title.set_text(f'{SEGMENT_CLASSES[1]} Predicted')
-    axarr[3].axis('off')
-    axarr[3].set_facecolor('black')
+# # Streamlit Interface
+# st.title("MRI Tumor Segmentation")
+# flair_file = st.file_uploader("Upload FLAIR Image (.nii)", type="nii")
+# t1ce_file = st.file_uploader("Upload T1CE Image (.nii)", type="nii")
 
-    # Core Prediction as solid color
-    axarr[4].imshow(origImage_resized, cmap="gray", interpolation='none')
-    axarr[4].imshow(core_binary, cmap="OrRd", interpolation='none', alpha=0.3)  # Solid color
-    axarr[4].title.set_text(f'{SEGMENT_CLASSES[2]} Predicted')
-    axarr[4].axis('off')
-    axarr[4].set_facecolor('black')
+# if flair_file and t1ce_file:
+#     with st.spinner("Predicting..."):
+#         predictions, flair_path = predict_images(flair_file, t1ce_file)
+#     display_predictions(predictions, flair_path)
 
-    # Enhancing Prediction as solid color
-    axarr[5].imshow(origImage_resized, cmap="gray", interpolation='none')
-    axarr[5].imshow(enhancing_binary, cmap="OrRd", interpolation='none', alpha=0.3)  # Solid color
-    axarr[5].title.set_text(f'{SEGMENT_CLASSES[3]} Predicted')
-    axarr[5].axis('off')
-    axarr[5].set_facecolor('black')
 
-    # Convert the figure to BGR format for OpenCV
-    plt.savefig('temp.png', bbox_inches='tight', dpi=300)
-    img = cv2.imread('temp.png')
-    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)  # Convert to BGR
+def display_predictions(predictions, flair_path, start_slice=70, gt=None):
+    orig_image = nib.load(flair_path).get_fdata()
+    core, edema, enhancing = predictions[:, :, :, 1], predictions[:, :, :, 2], predictions[:, :, :, 3]
+    
+    fig, axarr = plt.subplots(1, 6, figsize=(30, 10))  # Adjust the number of subplots
 
-    # Save the figure instead of displaying it
-    output_path = 'prediction_results.png'  # Specify your output path
-    cv2.imwrite(output_path, img_bgr)  # Save as BGR image
-    plt.close()  # Close the figure to free memory
+    # Original image
+    axarr[0].imshow(cv2.resize(orig_image[:, :, start_slice + VOLUME_START_AT], (IMG_SIZE, IMG_SIZE)), cmap="gray")
+    axarr[0].set_title('Original Flair')
+    
+    if gt is not None:  # If ground truth is available
+        curr_gt = cv2.resize(gt[:, :, start_slice + VOLUME_START_AT], (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_NEAREST)
+        axarr[1].imshow(curr_gt, cmap="Reds", alpha=0.3)
+        axarr[1].set_title('Ground Truth')
+    else:
+        axarr[1].imshow(np.zeros((IMG_SIZE, IMG_SIZE)), cmap="gray")  # Placeholder if gt is not provided
+        axarr[1].set_title('Ground Truth Not Provided')
 
-    # Inform the user that the figure has been saved
-    messagebox.showinfo("Info", f"Prediction results saved to {output_path}")
+    # Display all classes (Assuming p contains class predictions)
+    all_classes = np.max(predictions, axis=-1)  # Modify this based on how you want to visualize all classes
+    axarr[2].imshow(all_classes[start_slice, :, :], cmap="Reds", alpha=1)
+    axarr[2].set_title('All Classes')
 
-# GUI setup
-class MRIApp:
-    def __init__(self, master):
-        self.master = master
-        master.title("MRI Prediction GUI")
+    # Edema predicted
+    axarr[3].imshow(edema[start_slice, :, :], cmap="OrRd", alpha=1)
+    axarr[3].set_title(f'{SEGMENT_CLASSES[1]} Predicted')
 
-        self.label_flair = tk.Label(master, text="Select Flair MRI Image:")
-        self.label_flair.pack()
+    # Core predicted
+    axarr[4].imshow(core[start_slice, :, :], cmap="OrRd", alpha=1)
+    axarr[4].set_title(f'{SEGMENT_CLASSES[2]} Predicted')
 
-        self.flair_button = tk.Button(master, text="Select Flair Image", command=self.load_flair_image)
-        self.flair_button.pack()
+    # Enhancing predicted
+    axarr[5].imshow(enhancing[start_slice, :, :], cmap="OrRd", alpha=1)
+    axarr[5].set_title(f'{SEGMENT_CLASSES[3]} Predicted')
 
-        self.label_seg = tk.Label(master, text="Select Segmentation Image:")
-        self.label_seg.pack()
+    # Optional: Hide axes
+    for ax in axarr:
+        ax.axis('off')
 
-        self.seg_button = tk.Button(master, text="Select Segmentation Image", command=self.load_seg_image)
-        self.seg_button.pack()
-
-        self.start_slice_label = tk.Label(master, text="Enter Start Slice (0):")
-        self.start_slice_label.pack()
-
-        self.start_slice_entry = tk.Entry(master)
-        self.start_slice_entry.insert(0, "0")
-        self.start_slice_entry.pack()
-
-        self.predict_button = tk.Button(master, text="Show Predictions", command=self.show_predictions)
-        self.predict_button.pack()
-
-    def load_flair_image(self):
-        self.flair_path = filedialog.askopenfilename(filetypes=[("NIfTI Files", "*.nii")])
-        if not self.flair_path:
-            messagebox.showwarning("Warning", "No file selected for Flair image.")
-
-    def load_seg_image(self):
-        self.seg_path = filedialog.askopenfilename(filetypes=[("NIfTI Files", "*.nii")])
-        if not self.seg_path:
-            messagebox.showwarning("Warning", "No file selected for Segmentation image.")
-
-    def show_predictions(self):
-        start_slice = int(self.start_slice_entry.get())
-        try:
-            showPredictsById(self.flair_path, self.seg_path, start_slice)
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
-# Run the GUI
-root = tk.Tk()
-app = MRIApp(root)
-root.mainloop()
+    st.pyplot(fig)
+flair_file = st.file_uploader("Upload FLAIR Image (.nii)", type="nii")
+t1ce_file = st.file_uploader("Upload T1CE Image (.nii)", type="nii")
+# Make sure to call display_predictions with the correct parameters
+if flair_file and t1ce_file:
+    with st.spinner("Predicting..."):
+        predictions, flair_path = predict_images(flair_file, t1ce_file)
+        gt = None  # Replace with actual ground truth if available
+    display_predictions(predictions, flair_path, gt=gt)  # Pass the ground truth if available
