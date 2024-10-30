@@ -13,7 +13,8 @@ from plotly.subplots import make_subplots
 from mayavi import mlab
 import configobj
 import imageio
-
+import nilearn.plotting as nlplt
+import nilearn as nl
 from io import BytesIO
 # Define segmentation classes
 SEGMENT_CLASSES = {0: 'NOT tumor', 1: 'NECROTIC/CORE', 2: 'EDEMA', 3: 'ENHANCING'}
@@ -306,6 +307,16 @@ def visualize_t1_t2(t1_data, t2_data):
 
     st.pyplot(plt)
 
+
+
+
+
+
+
+
+
+
+
 def create_gif_from_nifti(nifti_file, fps=10):
     """
     Create a GIF from a 3D NIfTI image (FLAIR).
@@ -339,6 +350,50 @@ def create_gif_from_nifti(nifti_file, fps=10):
 
     return gif_bytes
 
+
+
+
+def plot_nifti_images(flair_file, seg_file):
+    """
+    Plot NIfTI images using nilearn and matplotlib, and return a BytesIO object with the plot.
+    
+    Parameters:
+    - flair_file (str): Path to the FLAIR NIfTI image file.
+    - seg_file (str): Path to the segmentation mask NIfTI file.
+    
+    Returns:
+    - BytesIO: The in-memory plot image.
+    """
+    # Load the FLAIR image and segmentation mask
+    niimg = nl.image.load_img(flair_file)
+    nimask = nl.image.load_img(seg_file)
+    
+    # Create subplots
+    fig, axes = plt.subplots(nrows=4, figsize=(10, 15))
+    
+    # Plot various representations of the FLAIR image
+    nlplt.plot_anat(niimg, title='FLAIR Image - plot_anat', axes=axes[0])
+    nlplt.plot_epi(niimg, title='FLAIR Image - plot_epi', axes=axes[1])
+    nlplt.plot_img(niimg, title='FLAIR Image - plot_img', axes=axes[2])
+    nlplt.plot_roi(nimask, title='FLAIR Image with Mask - plot_roi', bg_img=niimg, axes=axes[3], cmap='Paired')
+    
+    # Adjust spacing between subplots
+    fig.subplots_adjust(hspace=0.3, wspace=0.2)
+    
+    # Save plot to an in-memory file with tight bounding box
+    img_buffer = BytesIO()
+    fig.savefig(img_buffer, format="png", bbox_inches="tight")
+    img_buffer.seek(0)
+    plt.close(fig)  # Close the plot to free memory
+    
+    return img_buffer
+
+
+
+
+
+
+
 flair_file = st.file_uploader("Upload FLAIR Image (.nii)", type="nii")
 t1ce_file = st.file_uploader("Upload T1CE Image (.nii)", type="nii")
 seg_file = st.file_uploader("Upload Segmentation Image (.nii)", type="nii")
@@ -348,7 +403,7 @@ seg_file = st.file_uploader("Upload Segmentation Image (.nii)", type="nii")
 t1_file = st.file_uploader("Upload T1 Image (.nii)", type="nii")
 t2_file = st.file_uploader("Upload T2 Image (.nii)", type="nii")
 
-if t1_file is not None and t2_file is not None and flair_file is not None:
+if t1_file is not None and t2_file is not None and flair_file is not None and seg_file is not None:
     # Save uploaded files to temporary files
     try:
         with tempfile.NamedTemporaryFile(suffix=".nii", delete=False) as t1_temp_file:
@@ -361,6 +416,9 @@ if t1_file is not None and t2_file is not None and flair_file is not None:
         with tempfile.NamedTemporaryFile(suffix=".nii", delete=False) as flair_temp_file:
             flair_temp_file.write(flair_file.read())
             flair_temp_file_name = flair_temp_file.name
+        with tempfile.NamedTemporaryFile(suffix=".nii", delete=False) as temp_seg:
+            temp_seg.write(seg_file.read())
+                    
       
         # Load the temporary files using nibabel
         t1_img = nib.load(t1_temp_file_name)
@@ -382,7 +440,14 @@ if t1_file is not None and t2_file is not None and flair_file is not None:
       
         gif_data = create_gif_from_nifti(flair_temp_file_name, fps=10)
         st.image(gif_data, caption="3d Volumetric analysis", use_column_width=True, output_format="GIF")
+        # Streamlit app
+        st.title("NIfTI Image Visualization")
+        plot_image = plot_nifti_images(flair_temp_file.name, temp_seg.name)
+        st.image(plot_image, caption="FLAIR and Mask Visualization", use_column_width=True)
 
+   
+
+        # Display the plot
     except Exception as e:
         st.error(f"An error occurred: {e}")
 
