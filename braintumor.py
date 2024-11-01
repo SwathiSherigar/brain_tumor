@@ -16,6 +16,8 @@ import imageio
 import nilearn.plotting as nlplt
 import nilearn as nl
 from io import BytesIO
+import gif_your_nifti.core as gif2nif
+from scipy.ndimage import label
 # Define segmentation classes
 SEGMENT_CLASSES = {0: 'NOT tumor', 1: 'NECROTIC/CORE', 2: 'EDEMA', 3: 'ENHANCING'}
 IMG_SIZE = 128
@@ -76,9 +78,6 @@ def specificity(y_true, y_pred):
     possible_negatives = K.sum(K.round(K.clip(1-y_true, 0, 1)))
     return true_negatives / (possible_negatives + K.epsilon())
 
-
-
-
 model = keras.models.load_model('model_per_class.h5', 
                                    custom_objects={ 'accuracy' : tf.keras.metrics.MeanIoU(num_classes=4),
                                                    "dice_coef": dice_coef,
@@ -117,31 +116,6 @@ def predict_images(flair_file, t1ce_file,seg_file):
     # Get predictions
     predictions = model.predict(X / np.max(X), verbose=1)
     return predictions, flair_path, seg_path
-
-# # Display function
-# def display_predictions(predictions, flair_path, start_slice=70):
-#     orig_image = nib.load(flair_path).get_fdata()
-#     core, edema, enhancing = predictions[:, :, :, 1], predictions[:, :, :, 2], predictions[:, :, :, 3]
-
-#     fig, axarr = plt.subplots(1, 4, figsize=(20, 10))
-#     axarr[0].imshow(cv2.resize(orig_image[:, :, start_slice + VOLUME_START_AT], (IMG_SIZE, IMG_SIZE)), cmap="gray")
-#     axarr[0].set_title('Original Flair')
-    
-#     for i, (title, img) in enumerate(zip(['Necrotic/Core', 'Edema', 'Enhancing'], [core, edema, enhancing])):
-#         axarr[i + 1].imshow(img[start_slice, :, :], cmap="gray", alpha=0.5)
-#         axarr[i + 1].set_title(title)
-    
-#     st.pyplot(fig)
-
-# # Streamlit Interface
-# st.title("MRI Tumor Segmentation")
-# flair_file = st.file_uploader("Upload FLAIR Image (.nii)", type="nii")
-# t1ce_file = st.file_uploader("Upload T1CE Image (.nii)", type="nii")
-
-# if flair_file and t1ce_file:
-#     with st.spinner("Predicting..."):
-#         predictions, flair_path = predict_images(flair_file, t1ce_file)
-#     display_predictions(predictions, flair_path)
 
 
 def display_predictions(predictions, flair_path,seg_path, start_slice=70, gt=None):
@@ -185,13 +159,6 @@ def display_predictions(predictions, flair_path,seg_path, start_slice=70, gt=Non
         ax.axis('off')
 
     st.pyplot(fig)
-
-
-
-from scipy.ndimage import label
-
-
-
 
 
 def calculate_biomarkers(predictions, flair_path):
@@ -243,44 +210,6 @@ def display_predictions_with_biomarkers(predictions, flair_path):
                )
     st.write( f"Tumor Count: {volume_info['tumor_count']}")
 
-
-
-
-    
-
-
-
-
-
-# def visualize_t1_t2(t1_data, t2_data):
-#     """
-#     Visualize T1 and T2 weighted images.
-    
-#     Parameters:
-#     - t1_data (ndarray): T1-weighted image data.
-#     - t2_data (ndarray): T2-weighted image data.
-#     """
-#     # Display middle slices of the images
-#     slice_index = t1_data.shape[2] // 2
-
-#     plt.figure(figsize=(12, 6))
-
-#     # T1 image
-#     plt.subplot(1, 2, 1)
-#     plt.imshow(t1_data[:, :, slice_index], cmap='gray')
-#     plt.title('T1-weighted Image')
-#     plt.axis('off')
-
-#     # T2 image
-#     plt.subplot(1, 2, 2)
-#     plt.imshow(t2_data[:, :, slice_index], cmap='gray')
-#     plt.title('T2-weighted Image')
-#     plt.axis('off')
-
-#     st.pyplot(plt)
-
-
-
 def visualize_t1_t2(t1_data, t2_data):
     """
     Visualize T1 and T2 weighted images.
@@ -307,51 +236,21 @@ def visualize_t1_t2(t1_data, t2_data):
 
     st.pyplot(plt)
 
-
-
-
-
-
-
-
-
-
-
-def create_gif_from_nifti(nifti_file, fps=10):
-    """
-    Create a GIF from a 3D NIfTI image (FLAIR).
-    
-    Parameters:
-    - nifti_file (str): Path to the NIfTI file.
-    - fps (int): Frames per second for the GIF.
-    
-    Returns:
-    - BytesIO: In-memory GIF file.
-    """
-    # Load the NIfTI file
+def create_gif_from_nifti(nifti_file, fps=5):
+    # Load the NIfTI file using nibabel
     img = nib.load(nifti_file)
-    data = img.get_fdata()
+    data = img.get_fdata()  # Get the 3D volume data
+    
+    # Normalize data for visualization
+    data = (255 * (data - np.min(data)) / (np.max(data) - np.min(data))).astype(np.uint8)
 
-    # Normalize the data to 0-255 for better visualization
-    data_min = np.min(data)
-    data_max = np.max(data)
-    normalized_data = ((data - data_min) / (data_max - data_min) * 255).astype(np.uint8)
-
-    # Create a list to hold the frames
-    frames = []
-    for i in range(normalized_data.shape[2]):  # Iterate over slices along the z-axis
-        slice_data = normalized_data[:, :, i]
-        frames.append(slice_data)
-
-    # Create an in-memory GIF
-    gif_bytes = BytesIO()
-    imageio.mimsave(gif_bytes, frames, format="GIF", fps=fps,loop=0)
-    gif_bytes.seek(0)  # Reset to the beginning of the BytesIO object
+    # Collect slices along one axis (e.g., axial)
+    slices = [data[:, :, i] for i in range(data.shape[2])]
+    
+    # Save slices as a GIF
+    gif_bytes = imageio.mimwrite('<bytes>', slices, format='GIF', fps=fps)
 
     return gif_bytes
-
-
-
 
 def plot_nifti_images(flair_file, seg_file):
     """
@@ -434,14 +333,12 @@ if t1_file is not None and t2_file is not None and flair_file is not None and se
                 display_predictions(predictions, flair_path,seg_path)  # Pass the ground truth if available
                 display_predictions_with_biomarkers(predictions, flair_path)
         # Visualize the images
-        st.write("### T1 and T2 Weighted Images")
+        st.write("### Diffusion Weighted Images")
         visualize_t1_t2(t1_data, t2_data)
           # 3D Volume Visualization
       
-        gif_data = create_gif_from_nifti(flair_temp_file_name, fps=10)
+        gif_data = create_gif_from_nifti(flair_temp_file_name)
         st.image(gif_data, caption="3d Volumetric analysis", use_column_width=True, output_format="GIF")
-        # Streamlit app
-        st.title("NIfTI Image Visualization")
         plot_image = plot_nifti_images(flair_temp_file.name, temp_seg.name)
         st.image(plot_image, caption="FLAIR and Mask Visualization", use_column_width=True)
 
@@ -450,7 +347,3 @@ if t1_file is not None and t2_file is not None and flair_file is not None and se
         # Display the plot
     except Exception as e:
         st.error(f"An error occurred: {e}")
-
-# Add a button to clear the inputs
-if st.button("Clear Uploads"):
-    st.session_state.clear()
