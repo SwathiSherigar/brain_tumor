@@ -19,7 +19,7 @@ This project provides a web application built with **Streamlit** to perform **br
 
 This project requires Python and several Python libraries. You can set up the environment using the following `requirements.txt` file.
 
-### `requirements.txt`
+### `requirement.txt`
 
 ```txt
 streamlit==1.21.0
@@ -41,7 +41,7 @@ scipy==1.11.1
 ### To install the dependencies, run:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirement.txt
 ```
 
 ## How to Use
