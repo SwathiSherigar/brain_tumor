@@ -50,7 +50,7 @@ pip install -r requirements.txt
 To run the app locally, use the following command in your terminal:
 
 ```bash
-streamlit run app.py
+streamlit run braintumor.py
 ```
 
 This will start a local development server. Open the provided link (usually `http://localhost:8501`) in your browser to access the web interface.
