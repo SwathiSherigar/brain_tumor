@@ -218,7 +218,7 @@ def metastatic(predictions, flair_path):
 #     # Calculate biomarkers for all tumor classes
    
     biomarkers = calculate_biomarkers(predictions, flair_path)
-    st.write("### Metastasis Analysis")
+    st.write("### Meta Ststaic Analysis")
     for label,volume_info in biomarkers.items():    
     # Determine metastasis based on volume threshold
         if volume_info['volume_mm3']> 1000:
