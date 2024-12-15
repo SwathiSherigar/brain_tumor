@@ -201,14 +201,33 @@ def calculate_biomarkers(predictions, flair_path):
 
     return tumor_volume
 
+
+
 def display_predictions_with_biomarkers(predictions, flair_path):
     biomarkers = calculate_biomarkers(predictions, flair_path)
     st.write("### Tumor Biomarker Analysis")
+    
     for label, volume_info in biomarkers.items():
         st.write(f"{label} Volume: {volume_info['voxel_count']} voxels, "
                  f"{volume_info['volume_mm3']:.2f} mm³ "
                )
     st.write( f"Tumor Count: {volume_info['tumor_count']}")
+
+
+def metastatic(predictions, flair_path):
+#     # Calculate biomarkers for all tumor classes
+   
+    biomarkers = calculate_biomarkers(predictions, flair_path)
+    st.write("### Metastasis Analysis")
+    for label,volume_info in biomarkers.items():    
+    # Determine metastasis based on volume threshold
+        if volume_info['volume_mm3']> 1000:
+            st.write(f"**{label}:** Metastasis detected")
+        else:
+            st.write(f"**{label}:** No metastasis detected")
+    
+
+
 
 def visualize_t1_t2(t1_data, t2_data):
     """
@@ -332,15 +351,16 @@ if t1_file is not None and t2_file is not None and flair_file is not None and se
       
                 display_predictions(predictions, flair_path,seg_path)  # Pass the ground truth if available
                 display_predictions_with_biomarkers(predictions, flair_path)
+                metastatic(predictions, flair_path )
         # Visualize the images
         st.write("### Diffusion Weighted Images")
         visualize_t1_t2(t1_data, t2_data)
           # 3D Volume Visualization
       
         gif_data = create_gif_from_nifti(flair_temp_file_name)
-        st.image(gif_data, caption="3d Volumetric analysis", use_column_width=True, output_format="GIF")
+        st.image(gif_data, caption="3d Volumetric analysis", use_container_width=True, output_format="GIF")
         plot_image = plot_nifti_images(flair_temp_file.name, temp_seg.name)
-        st.image(plot_image, caption="FLAIR and Mask Visualization", use_column_width=True)
+        st.image(plot_image, caption="FLAIR and Mask Visualization", use_container_width=True)
 
    
 
